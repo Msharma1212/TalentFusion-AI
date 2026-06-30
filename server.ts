@@ -15,6 +15,17 @@ dotenv.config();
 const app = express();
 const PORT = 3000;
 
+// CORS Middleware to prevent connection/CORS errors across preview origins (Task 4)
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization");
+  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(200);
+  }
+  next();
+});
+
 // Configure Multer for PDF resume uploads
 const storage = multer.memoryStorage();
 const upload = multer({
@@ -34,6 +45,7 @@ const geminiApiKey = process.env.GEMINI_API_KEY;
 let aiClient: GoogleGenAI | null = null;
 
 if (geminiApiKey) {
+  console.log("[TalentFusion AI] GEMINI_API_KEY detected. Initializing GoogleGenAI client...");
   aiClient = new GoogleGenAI({
     apiKey: geminiApiKey,
     httpOptions: {
@@ -42,6 +54,8 @@ if (geminiApiKey) {
       }
     }
   });
+} else {
+  console.warn("[TalentFusion AI] WARNING: GEMINI_API_KEY is not defined in the environment variables!");
 }
 
 // In-Memory Database of Candidates
@@ -482,6 +496,78 @@ function buildSingleTeamFallback(
   };
 }
 
+function sanitizeAndMergeTeamData(incoming: any, fallback: any): any {
+  if (!incoming || typeof incoming !== "object") return fallback;
+  const result = { ...fallback };
+  
+  if (typeof incoming.name === "string" && incoming.name.trim().length > 0) {
+    result.name = incoming.name;
+  }
+  
+  if (Array.isArray(incoming.roleAssignments)) {
+    result.roleAssignments = incoming.roleAssignments.map((ra: any, idx: number) => {
+      const fb = fallback.roleAssignments[idx] || fallback.roleAssignments[0] || { role: "Developer", candidateId: "", candidateName: "Unknown" };
+      return {
+        role: (typeof ra?.role === "string" && ra.role.trim().length > 0) ? ra.role : fb.role,
+        candidateId: (typeof ra?.candidateId === "string" && ra.candidateId.trim().length > 0) ? ra.candidateId : fb.candidateId,
+        candidateName: (typeof ra?.candidateName === "string" && ra.candidateName.trim().length > 0) ? ra.candidateName : fb.candidateName
+      };
+    });
+  }
+  
+  if (incoming.compatibility && typeof incoming.compatibility === "object") {
+    result.compatibility = {
+      skillDiversity: typeof incoming.compatibility.skillDiversity === "number" ? incoming.compatibility.skillDiversity : fallback.compatibility.skillDiversity,
+      leadershipBalance: typeof incoming.compatibility.leadershipBalance === "number" ? incoming.compatibility.leadershipBalance : fallback.compatibility.leadershipBalance,
+      experienceBalance: typeof incoming.compatibility.experienceBalance === "number" ? incoming.compatibility.experienceBalance : fallback.compatibility.experienceBalance,
+      communication: typeof incoming.compatibility.communication === "number" ? incoming.compatibility.communication : fallback.compatibility.communication,
+      learningPotential: typeof incoming.compatibility.learningPotential === "number" ? incoming.compatibility.learningPotential : fallback.compatibility.learningPotential,
+      conflictRisk: typeof incoming.compatibility.conflictRisk === "number" ? incoming.compatibility.conflictRisk : fallback.compatibility.conflictRisk,
+      innovationScore: typeof incoming.compatibility.innovationScore === "number" ? incoming.compatibility.innovationScore : fallback.compatibility.innovationScore,
+      deliveryConfidence: typeof incoming.compatibility.deliveryConfidence === "number" ? incoming.compatibility.deliveryConfidence : fallback.compatibility.deliveryConfidence,
+      overall: typeof incoming.compatibility.overall === "number" ? incoming.compatibility.overall : fallback.compatibility.overall,
+      explanation: (typeof incoming.compatibility.explanation === "string" && incoming.compatibility.explanation.trim().length > 0) ? incoming.compatibility.explanation : fallback.compatibility.explanation,
+      burnoutRisk: typeof incoming.compatibility.burnoutRisk === "number" ? incoming.compatibility.burnoutRisk : fallback.compatibility.burnoutRisk,
+      knowledgeCoverage: typeof incoming.compatibility.knowledgeCoverage === "number" ? incoming.compatibility.knowledgeCoverage : fallback.compatibility.knowledgeCoverage,
+      communicationBalance: typeof incoming.compatibility.communicationBalance === "number" ? incoming.compatibility.communicationBalance : fallback.compatibility.communicationBalance,
+    };
+  }
+  
+  if (Array.isArray(incoming.strengths) && incoming.strengths.length > 0) {
+    result.strengths = incoming.strengths.filter((s: any) => typeof s === "string" && s.trim().length > 0);
+  }
+  if (Array.isArray(incoming.risks) && incoming.risks.length > 0) {
+    result.risks = incoming.risks.filter((r: any) => typeof r === "string" && r.trim().length > 0);
+  }
+  
+  if (incoming.teamDna && typeof incoming.teamDna === "object") {
+    result.teamDna = {
+      innovationIndex: typeof incoming.teamDna.innovationIndex === "number" ? incoming.teamDna.innovationIndex : fallback.teamDna.innovationIndex,
+      executionIndex: typeof incoming.teamDna.executionIndex === "number" ? incoming.teamDna.executionIndex : fallback.teamDna.executionIndex,
+      leadershipIndex: typeof incoming.teamDna.leadershipIndex === "number" ? incoming.teamDna.leadershipIndex : fallback.teamDna.leadershipIndex,
+      learningSpeed: typeof incoming.teamDna.learningSpeed === "number" ? incoming.teamDna.learningSpeed : fallback.teamDna.learningSpeed,
+      communicationIndex: typeof incoming.teamDna.communicationIndex === "number" ? incoming.teamDna.communicationIndex : fallback.teamDna.communicationIndex,
+      technicalCoverage: typeof incoming.teamDna.technicalCoverage === "number" ? incoming.teamDna.technicalCoverage : fallback.teamDna.technicalCoverage,
+      riskLevel: ["Low", "Medium", "High"].includes(incoming.teamDna.riskLevel) ? incoming.teamDna.riskLevel : fallback.teamDna.riskLevel,
+      recommendedLead: (typeof incoming.teamDna.recommendedLead === "string" && incoming.teamDna.recommendedLead.trim().length > 0) ? incoming.teamDna.recommendedLead : fallback.teamDna.recommendedLead,
+      workingStyle: (typeof incoming.teamDna.workingStyle === "string" && incoming.teamDna.workingStyle.trim().length > 0) ? incoming.teamDna.workingStyle : fallback.teamDna.workingStyle,
+    };
+  }
+  
+  return result;
+}
+
+function sanitizeAllArchetypes(incoming: any, fallbackArchetypes: any): any {
+  if (!incoming || typeof incoming !== "object") return fallbackArchetypes;
+  return {
+    best: sanitizeAndMergeTeamData(incoming.best, fallbackArchetypes.best),
+    alternative: sanitizeAndMergeTeamData(incoming.alternative, fallbackArchetypes.alternative),
+    budget: sanitizeAndMergeTeamData(incoming.budget, fallbackArchetypes.budget),
+    innovation: sanitizeAndMergeTeamData(incoming.innovation, fallbackArchetypes.innovation),
+    delivery: sanitizeAndMergeTeamData(incoming.delivery, fallbackArchetypes.delivery),
+  };
+}
+
 function buildTeamFallback(candidates: Candidate[], requirements: string, teamSize: number): any {
   return {
     best: buildSingleTeamFallback(candidates, requirements, teamSize, "best"),
@@ -658,6 +744,68 @@ function analyzeCandidateFallback(candidate: Candidate, targetRole: string, jobD
   };
 }
 
+function buildDefaultAgentReport(candidate: Candidate): any {
+  return {
+    overallVerdict: `Highly recommended for the role of ${candidate.recommendedRole}. Matches ${candidate.overallScore}% of standard evaluation criteria.`,
+    fitScore: candidate.overallScore,
+    technicalMatch: Math.min(100, candidate.overallScore + 2),
+    businessFit: 88,
+    leadershipScore: candidate.leadership || 75,
+    communicationScore: candidate.communication || 80,
+    learningAbility: candidate.learningAbility || 85,
+    innovationScore: 82,
+    salaryEfficiency: 85,
+    teamCompatibility: 90,
+    riskLevel: candidate.overallScore >= 90 ? "Low" : (candidate.overallScore >= 75 ? "Medium" : "High"),
+    confidenceScore: 94,
+    whyBulletPoints: [
+      `Excellent alignment with primary requirement vectors: ${candidate.skills.slice(0, 3).join(", ")}.`,
+      `Verified professional background showing ${candidate.experience} years of hands-on delivery.`,
+      `Proven execution capabilities through key highlighted projects: ${candidate.projects.slice(0, 2).map(p => p.name).join(", ") || "various engineering projects"}.`
+    ],
+    matchingSkills: candidate.skills.slice(0, 5),
+    relevantProjects: candidate.projects.map(p => p.name).slice(0, 3),
+    experienceOverlap: `Matches ${candidate.experience} years of core experience required for senior product delivery.`,
+    domainKnowledge: `Demonstrates high competency in standard software lifecycle paradigms and modern cloud services.`,
+    missingSkills: candidate.skills.length < 4 ? ["Niche legacy platform migrations"] : [],
+    budgetConcerns: "Fits well within standard tier allocation structures.",
+    leadershipConcerns: candidate.leadership >= 80 ? "Demonstrates strong initiative; ideal for technical leadership." : "Standard team contributor; no major execution concerns.",
+    learningCurveConcern: "Negligible. Expected to onboard and ship production code within the first week.",
+    suggestedActionLabel: candidate.overallScore >= 90 ? "✔ Strong Hire" : (candidate.overallScore >= 80 ? "✔ Hire" : "✔ Keep as Backup")
+  };
+}
+
+function buildDefaultTeamAgentReport(): any {
+  return {
+    overallVerdict: "Comprehensive talent pool mapping indicates a high-functioning group of technical specialists. Ideal cross-functional coverage achieved.",
+    fitScore: 88,
+    technicalMatch: 90,
+    businessFit: 86,
+    leadershipScore: 84,
+    communicationScore: 85,
+    learningAbility: 88,
+    innovationScore: 85,
+    salaryEfficiency: 82,
+    teamCompatibility: 92,
+    riskLevel: "Low",
+    confidenceScore: 92,
+    whyBulletPoints: [
+      "Robust technical alignment across active candidates covering Next.js, Go, Python, and PyTorch.",
+      "Clear division of responsibilities across specialized engineering streams.",
+      "High aggregate experience level ensuring mature product development execution."
+    ],
+    matchingSkills: ["Next.js", "Python", "Go", "Docker", "AWS", "PyTorch"],
+    relevantProjects: ["Enterprise Admin Dashboard", "Distributed Chat Service", "Multimodal RAG Engine"],
+    experienceOverlap: "The combined team experience surpasses 15+ aggregate years, fully aligned with launching high-complexity modern SaaS.",
+    domainKnowledge: "Comprehensive domain coverage spanning backend orchestration, cloud database sizing, frontend system design, and AI models.",
+    missingSkills: ["Legacy assembly integrations"],
+    budgetConcerns: "Slight premium rates for highly specialized AI talent, but overall high ROI.",
+    leadershipConcerns: "Excellent lead coverage; recommended lead matches are clearly partitioned.",
+    learningCurveConcern: "Extremely fast onboarding expected due to standardized modern stack alignment.",
+    suggestedActionLabel: "✔ Strong Hire"
+  };
+}
+
 function chatFallback(messages: any[], query: string): any {
   const text = query || (messages && messages[messages.length - 1]?.text) || "";
   const queryLower = text.toLowerCase();
@@ -730,18 +878,58 @@ function chatFallback(messages: any[], query: string): any {
     }
   }
 
+  let agentReport: any = undefined;
+
+  if (candidateIds.length > 0) {
+    const firstId = candidateIds[0];
+    const candidate = candidatesDb.find(c => c.id === firstId);
+    if (candidate) {
+      agentReport = buildDefaultAgentReport(candidate);
+    } else {
+      agentReport = buildDefaultTeamAgentReport();
+    }
+  }
+
   return {
     text: replyText,
     suggestedAction,
-    candidateIds
+    candidateIds,
+    agentReport
   };
 }
 
 app.use(express.json());
 
-// API: Health Check
-app.get("/api/health", (req, res) => {
-  res.json({ status: "ok", time: new Date() });
+// API: Logging middleware for incoming requests, errors, and response times
+app.use((req, res, next) => {
+  const start = Date.now();
+  res.on("finish", () => {
+    const duration = Date.now() - start;
+    console.log(`[TalentFusion AI API Log] ${req.method} ${req.originalUrl} - Status: ${res.statusCode} - Time: ${duration}ms`);
+  });
+  next();
+});
+
+// API: Health Check (Task 3 specification compliance)
+app.get(["/health", "/api/health"], (req, res) => {
+  res.json({
+    status: "online",
+    backend: "running",
+    parser: "ready",
+    gemini: aiClient ? "connected" : "disconnected"
+  });
+});
+
+// API: Status
+app.get(["/status", "/api/status"], (req, res) => {
+  res.json({
+    status: "online",
+    backend: "running",
+    parser: "ready",
+    gemini: aiClient ? "connected" : "disconnected",
+    uptime: process.uptime(),
+    candidatesCount: candidatesDb.length
+  });
 });
 
 // API: List Candidates
@@ -755,78 +943,87 @@ app.post("/api/candidates/reset", (req, res) => {
   res.json({ success: true, message: "Database reset to original mock candidates.", data: candidatesDb });
 });
 
-// API: Parse PDF Resume using Gemini Multimodal native input
-app.post("/api/upload", upload.single("resume"), async (req, res) => {
+// API: Parse PDF Resume or Text via multiple route aliases (POST /parse, POST /api/parse, POST /upload, POST /api/upload)
+app.post(["/upload", "/api/upload", "/parse", "/api/parse"], upload.single("resume"), async (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ success: false, error: "No file uploaded." });
+    if (!req.file && !req.body.text && !req.body.resumeText) {
+      return res.status(400).json({ success: false, error: "No file or text payload provided." });
     }
 
     const jobDescription = req.body.jobDescription || "Full Stack Software Developer team member.";
-    const originalName = req.file.originalname;
+    const originalName = req.file ? req.file.originalname : "Parsed Resume";
 
     if (!aiClient) {
       return res.status(500).json({ success: false, error: "Gemini API client not initialized. Cannot parse resume." });
     }
 
-    // 1. Write the PDF buffer to a unique temporary file
-    const tempPath = path.join(os.tmpdir(), `resume-${Date.now()}-${Math.floor(Math.random() * 1000)}.pdf`);
-    fs.writeFileSync(tempPath, req.file.buffer);
-
     let extractedText = "";
     let parseMethod = "";
 
-    // 2. Extract text using PyMuPDF and pdfplumber in Python (Rule 2)
-    try {
-      const output = execSync(`python3 /parser.py "${tempPath}"`, { encoding: "utf8" });
-      if (output.includes("---METHOD:PYMUPDF---")) {
-        parseMethod = "PyMuPDF";
-        extractedText = output.split("---METHOD:PYMUPDF---")[1].trim();
-      } else if (output.includes("---METHOD:PDFPLUMBER---")) {
-        parseMethod = "pdfplumber";
-        extractedText = output.split("---METHOD:PDFPLUMBER---")[1].trim();
-      }
-    } catch (pyErr: any) {
-      console.warn("Python-based text extraction failed:", pyErr.message || pyErr);
-    } finally {
-      try {
-        fs.unlinkSync(tempPath);
-      } catch (unlinkErr) {
-        console.error("Failed to remove temp file:", unlinkErr);
-      }
-    }
+    if (req.file) {
+      // 1. Write the PDF buffer to a unique temporary file
+      const tempPath = path.join(os.tmpdir(), `resume-${Date.now()}-${Math.floor(Math.random() * 1000)}.pdf`);
+      fs.writeFileSync(tempPath, req.file.buffer);
 
-    // 3. Fallback to OCR if Python extraction is blank/too short (Rule 2)
-    if (!extractedText || extractedText.length < 50) {
+      // 2. Extract text using PyMuPDF and pdfplumber in Python (Rule 2)
       try {
-        console.log("Python PDF text extraction returned empty or failed. Invoking Gemini OCR fallback...");
-        parseMethod = "Gemini OCR";
-        const pdfBase64 = req.file.buffer.toString("base64");
-        const ocrResponse = await aiClient.models.generateContent({
-          model: "gemini-3.5-flash",
-          contents: [
-            {
-              inlineData: {
-                data: pdfBase64,
-                mimeType: "application/pdf"
-              }
-            },
-            {
-              text: "Perform OCR on this scanned PDF document and extract all text verbatim. Preserve formatting, headings, and sections (such as Education, Experience, Projects, Skills, Certifications, Achievements, Languages, Summary) exactly. Do not summarize, explain, or edit the text. Output ONLY the extracted text."
-            }
-          ]
-        });
-        extractedText = ocrResponse.text || "";
-      } catch (ocrErr: any) {
-        console.error("Gemini OCR fallback failed:", ocrErr.message || ocrErr);
+        const pythonPackagesPath = path.join(process.cwd(), "python_packages");
+        const parserScriptPath = path.join(process.cwd(), "parser.py");
+        console.log(`[TalentFusion AI] Running parser.py with PYTHONPATH="${pythonPackagesPath}"`);
+        const output = execSync(`PYTHONPATH="${pythonPackagesPath}" python3 "${parserScriptPath}" "${tempPath}"`, { encoding: "utf8" });
+        if (output.includes("---METHOD:PYMUPDF---")) {
+          parseMethod = "PyMuPDF";
+          extractedText = output.split("---METHOD:PYMUPDF---")[1].trim();
+        } else if (output.includes("---METHOD:PDFPLUMBER---")) {
+          parseMethod = "pdfplumber";
+          extractedText = output.split("---METHOD:PDFPLUMBER---")[1].trim();
+        }
+        console.log(`[TalentFusion AI] Extracted text using ${parseMethod} (length: ${extractedText.length})`);
+      } catch (pyErr: any) {
+        console.warn("[TalentFusion AI] Python-based text extraction failed:", pyErr.message || pyErr);
+      } finally {
+        try {
+          fs.unlinkSync(tempPath);
+        } catch (unlinkErr) {
+          console.error("[TalentFusion AI] Failed to remove temp file:", unlinkErr);
+        }
       }
+
+      // 3. Fallback to OCR if Python extraction is blank/too short (Rule 2)
+      if (!extractedText || extractedText.length < 50) {
+        try {
+          console.log("Python PDF text extraction returned empty or failed. Invoking Gemini OCR fallback...");
+          parseMethod = "Gemini OCR";
+          const pdfBase64 = req.file.buffer.toString("base64");
+          const ocrResponse = await aiClient.models.generateContent({
+            model: "gemini-3.5-flash",
+            contents: [
+              {
+                inlineData: {
+                  data: pdfBase64,
+                  mimeType: "application/pdf"
+                }
+              },
+              {
+                text: "Perform OCR on this scanned PDF document and extract all text verbatim. Preserve formatting, headings, and sections (such as Education, Experience, Projects, Skills, Certifications, Achievements, Languages, Summary) exactly. Do not summarize, explain, or edit the text. Output ONLY the extracted text."
+              }
+            ]
+          });
+          extractedText = ocrResponse.text || "";
+        } catch (ocrErr: any) {
+          console.error("Gemini OCR fallback failed:", ocrErr.message || ocrErr);
+        }
+      }
+    } else {
+      extractedText = req.body.text || req.body.resumeText || "";
+      parseMethod = "Direct Text Input";
     }
 
     // Backend validation: if text is completely missing, reject (Rule 15)
     if (!extractedText || extractedText.trim().length < 20) {
       return res.status(400).json({
         success: false,
-        error: "Failed backend validation: Unable to extract any readable text from the PDF resume."
+        error: "Failed backend validation: Unable to extract any readable text."
       });
     }
 
@@ -1236,10 +1433,12 @@ app.post("/api/teambuilder", async (req, res) => {
         }
 
         // Validate structure has the key archetypes, if missing some, merge with fallback
-        if (teamArchetypes && teamArchetypes.best) {
+        if (teamArchetypes && typeof teamArchetypes === "object") {
+          const fallbackArchetypes = buildTeamFallback(filteredCandidates, reqText, size);
+          const sanitizedData = sanitizeAllArchetypes(teamArchetypes, fallbackArchetypes);
           return res.json({
             success: true,
-            data: teamArchetypes,
+            data: sanitizedData,
             whatIfAnalysis,
             fallbackUsed: false
           });
@@ -1369,6 +1568,322 @@ app.post("/api/candidates/:id/analysis", async (req, res) => {
   }
 });
 
+// --- AGENT ENDPOINTS ---
+
+// Helper function to query Gemini and return structured agent response
+async function runAgentGemini(systemPrompt: string, userPrompt: string, history: any[] = []): Promise<any> {
+  if (!aiClient) {
+    throw new Error("Gemini API client not initialized");
+  }
+  const chatHistory = history.map((m: any) => ({
+    role: m.sender === "user" ? "user" : "model",
+    parts: [{ text: m.text }]
+  }));
+  const contents = [
+    ...chatHistory.slice(-6),
+    { role: "user", parts: [{ text: userPrompt }] }
+  ];
+
+  const response = await aiClient.models.generateContent({
+    model: "gemini-3.5-flash",
+    contents,
+    config: {
+      systemInstruction: systemPrompt,
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          overallVerdict: { type: Type.STRING },
+          fitScore: { type: Type.INTEGER },
+          technicalMatch: { type: Type.INTEGER },
+          businessFit: { type: Type.INTEGER },
+          leadershipScore: { type: Type.INTEGER },
+          communicationScore: { type: Type.INTEGER },
+          learningAbility: { type: Type.INTEGER },
+          innovationScore: { type: Type.INTEGER },
+          salaryEfficiency: { type: Type.INTEGER },
+          teamCompatibility: { type: Type.INTEGER },
+          riskLevel: { type: Type.STRING },
+          confidenceScore: { type: Type.INTEGER },
+          whyBulletPoints: { type: Type.ARRAY, items: { type: Type.STRING } },
+          matchingSkills: { type: Type.ARRAY, items: { type: Type.STRING } },
+          relevantProjects: { type: Type.ARRAY, items: { type: Type.STRING } },
+          experienceOverlap: { type: Type.STRING },
+          domainKnowledge: { type: Type.STRING },
+          missingSkills: { type: Type.ARRAY, items: { type: Type.STRING } },
+          budgetConcerns: { type: Type.STRING },
+          leadershipConcerns: { type: Type.STRING },
+          learningCurveConcern: { type: Type.STRING },
+          suggestedActionLabel: { type: Type.STRING },
+          suggestedAction: {
+            type: Type.OBJECT,
+            properties: {
+              type: { type: Type.STRING },
+              payload: {
+                type: Type.OBJECT,
+                properties: {
+                  id: { type: Type.STRING },
+                  candidateIds: { type: Type.ARRAY, items: { type: Type.STRING } },
+                  requirements: { type: Type.STRING }
+                }
+              }
+            }
+          }
+        },
+        required: [
+          "overallVerdict", "fitScore", "technicalMatch", "businessFit", 
+          "leadershipScore", "communicationScore", "learningAbility", 
+          "innovationScore", "salaryEfficiency", "teamCompatibility", 
+          "riskLevel", "confidenceScore", "whyBulletPoints", 
+          "matchingSkills", "relevantProjects", "experienceOverlap", 
+          "domainKnowledge", "missingSkills", "budgetConcerns", 
+          "leadershipConcerns", "learningCurveConcern", "suggestedActionLabel"
+        ]
+      }
+    }
+  });
+
+  const text = response.text || "{}";
+  try {
+    return JSON.parse(text);
+  } catch (err) {
+    const cleaned = text.replace(/```json/g, "").replace(/```/g, "").trim();
+    return JSON.parse(cleaned);
+  }
+}
+
+// Fallback helper for agent endpoints
+function getAgentFallback(query: string, candidatesList: Candidate[], selectedCandidateId?: string): any {
+  let targetCand = selectedCandidateId ? candidatesList.find(c => c.id === selectedCandidateId) : null;
+  if (!targetCand && query) {
+    const lowerQ = query.toLowerCase();
+    targetCand = candidatesList.find(c => lowerQ.includes(c.name.toLowerCase())) || null;
+  }
+  
+  if (targetCand) {
+    const report = buildDefaultAgentReport(targetCand);
+    return {
+      ...report,
+      suggestedAction: {
+        type: "view_candidate",
+        payload: { id: targetCand.id }
+      }
+    };
+  }
+
+  const report = buildDefaultTeamAgentReport();
+  return {
+    ...report,
+    suggestedAction: null
+  };
+}
+
+// Map both root, /api, /agent and /api/agent prefixes
+["", "/api", "/agent", "/api/agent"].forEach((prefix) => {
+  // 1. POST /agent/query
+  app.post(`${prefix}/query`, async (req, res) => {
+    try {
+      const { query, messages, candidates, currentTeam, jobDescription } = req.body;
+      const list = Array.isArray(candidates) ? candidates : candidatesDb;
+      const recentQuery = query || "Evaluate the team's overall readiness.";
+
+      if (aiClient) {
+        try {
+          const systemPrompt = `
+            You are "FusionAI", an advanced Workforce Intelligence Reasoning Agent.
+            Evaluate queries from recruiters and return deeply analytical, structured JSON reports.
+            
+            ACTIVE CANDIDATE POOL:
+            ${JSON.stringify(list, null, 2)}
+
+            CURRENT ACTIVE TEAM:
+            ${JSON.stringify(currentTeam || null, null, 2)}
+
+            JOB DESCRIPTION CONTEXT:
+            ${jobDescription || "Not explicitly specified."}
+
+            Please output valid JSON matching the schema. NEVER return plain text or wrap in markdown.
+          `;
+
+          const result = await runAgentGemini(systemPrompt, recentQuery, messages || []);
+          return res.json({ success: true, data: result, fallbackUsed: false });
+        } catch (geminiErr: any) {
+          console.warn("Gemini agent query failed, falling back:", geminiErr);
+        }
+      }
+
+      const fallback = getAgentFallback(recentQuery, list);
+      return res.json({ success: true, data: fallback, fallbackUsed: true });
+    } catch (err: any) {
+      console.error("Agent Query Error:", err);
+      res.status(500).json({ success: false, error: err.message || "Internal agent error" });
+    }
+  });
+
+  // 2. POST /agent/team-analysis
+  app.post(`${prefix}/team-analysis`, async (req, res) => {
+    try {
+      const { team, requirements, candidates } = req.body;
+      const list = Array.isArray(candidates) ? candidates : candidatesDb;
+      const reqs = requirements || "Build a high-performance cross-functional product team.";
+
+      if (aiClient) {
+        try {
+          const systemPrompt = `
+            You are "FusionAI", an advanced Workforce Intelligence Reasoning Agent specializing in team dynamics, skill gaps, and leadership coverage.
+            Analyze the provided team composition against requirements and the candidate pool.
+            
+            ACTIVE TEAM SQUAD:
+            ${JSON.stringify(team || null, null, 2)}
+
+            TEAM BUILD REQUIREMENTS:
+            ${reqs}
+
+            CANDIDATE RESOURCE POOL:
+            ${JSON.stringify(list, null, 2)}
+
+            Formulate a highly professional workforce composition verdict and return structured JSON.
+          `;
+
+          const result = await runAgentGemini(systemPrompt, "Evaluate this team composition suitability.");
+          return res.json({ success: true, data: result, fallbackUsed: false });
+        } catch (geminiErr: any) {
+          console.warn("Gemini agent team-analysis failed, falling back:", geminiErr);
+        }
+      }
+
+      const fallback = getAgentFallback(reqs, list);
+      return res.json({ success: true, data: fallback, fallbackUsed: true });
+    } catch (err: any) {
+      console.error("Agent Team Analysis Error:", err);
+      res.status(500).json({ success: false, error: err.message || "Internal agent error" });
+    }
+  });
+
+  // 3. POST /agent/candidate-analysis
+  app.post(`${prefix}/candidate-analysis`, async (req, res) => {
+    try {
+      const { candidateId, jobDescription } = req.body;
+      const list = candidatesDb;
+      const candidate = list.find(c => c.id === candidateId) || list[0];
+      const jd = jobDescription || "Senior Product Software Developer.";
+
+      if (aiClient && candidate) {
+        try {
+          const systemPrompt = `
+            You are "FusionAI", an advanced Workforce Intelligence Reasoning Agent.
+            Analyze the specific candidate details against the Target Job Description.
+            
+            CANDIDATE PROFILE:
+            ${JSON.stringify(candidate, null, 2)}
+
+            TARGET JOB DESCRIPTION:
+            ${jd}
+
+            Formulate a highly detailed candidate fit verdict and return structured JSON.
+          `;
+
+          const result = await runAgentGemini(systemPrompt, `Provide detailed agent evaluation for ${candidate.name}.`);
+          return res.json({ success: true, data: result, fallbackUsed: false });
+        } catch (geminiErr: any) {
+          console.warn("Gemini agent candidate-analysis failed, falling back:", geminiErr);
+        }
+      }
+
+      const fallback = getAgentFallback(`Evaluate fitting for ${candidate ? candidate.name : "candidate"}`, list, candidate?.id);
+      return res.json({ success: true, data: fallback, fallbackUsed: true });
+    } catch (err: any) {
+      console.error("Agent Candidate Analysis Error:", err);
+      res.status(500).json({ success: false, error: err.message || "Internal agent error" });
+    }
+  });
+
+  // 4. POST /agent/compare
+  app.post(`${prefix}/compare`, async (req, res) => {
+    try {
+      const { candidateIds, jobDescription } = req.body;
+      const list = candidatesDb;
+      const selectedIds = Array.isArray(candidateIds) ? candidateIds : [];
+      const selectedCands = list.filter(c => selectedIds.includes(c.id));
+      const jd = jobDescription || "Senior Engineering Lead.";
+
+      if (aiClient && selectedCands.length > 0) {
+        try {
+          const systemPrompt = `
+            You are "FusionAI", an advanced Workforce Intelligence Reasoning Agent.
+            Compare the selected candidates against each other relative to the Target Job Description.
+            
+            SELECTED CANDIDATE PROFILES:
+            ${JSON.stringify(selectedCands, null, 2)}
+
+            TARGET JOB DESCRIPTION:
+            ${jd}
+
+            Synthesize a comparative evaluation showing relative trade-offs, advantages, and return a unified structured JSON report representing the optimal recommendation choice.
+          `;
+
+          const result = await runAgentGemini(systemPrompt, "Compare these candidates and provide a structured comparative verdict.");
+          return res.json({ success: true, data: result, fallbackUsed: false });
+        } catch (geminiErr: any) {
+          console.warn("Gemini agent compare failed, falling back:", geminiErr);
+        }
+      }
+
+      const fallback = getAgentFallback(`Compare candidates: ${selectedCands.map(c => c.name).join(", ")}`, list, selectedCands[0]?.id);
+      if (selectedCands.length > 1) {
+        fallback.overallVerdict = `Comparative trade-off: ${selectedCands[0]?.name} offers stronger technical leadership, whereas ${selectedCands[1]?.name} brings specialized design/ux excellence. Both are outstanding fits depending on business priorities.`;
+        fallback.suggestedAction = {
+          type: "compare",
+          payload: { candidateIds: selectedIds }
+        };
+      }
+      return res.json({ success: true, data: fallback, fallbackUsed: true });
+    } catch (err: any) {
+      console.error("Agent Compare Error:", err);
+      res.status(500).json({ success: false, error: err.message || "Internal agent error" });
+    }
+  });
+
+  // 5. POST /agent/recommend
+  app.post(`${prefix}/recommend`, async (req, res) => {
+    try {
+      const { jobDescription, candidates } = req.body;
+      const list = Array.isArray(candidates) ? candidates : candidatesDb;
+      const jd = jobDescription || "Lead Software Engineer.";
+
+      if (aiClient) {
+        try {
+          const systemPrompt = `
+            You are "FusionAI", an advanced Workforce Intelligence Reasoning Agent.
+            Find the absolute best matching candidate from the active pool relative to the Target Job Description.
+            
+            CANDIDATE POOL:
+            ${JSON.stringify(list, null, 2)}
+
+            TARGET JOB DESCRIPTION:
+            ${jd}
+
+            Select the top matching candidate, explain the rationale, and return a structured JSON report.
+          `;
+
+          const result = await runAgentGemini(systemPrompt, "Recommend the best matching candidate.");
+          return res.json({ success: true, data: result, fallbackUsed: false });
+        } catch (geminiErr: any) {
+          console.warn("Gemini agent recommend failed, falling back:", geminiErr);
+        }
+      }
+
+      // Fallback: choose highest overall score candidate
+      const sorted = [...list].sort((a, b) => b.overallScore - a.overallScore);
+      const fallback = getAgentFallback(`Recommend best for ${jd}`, list, sorted[0]?.id);
+      return res.json({ success: true, data: fallback, fallbackUsed: true });
+    } catch (err: any) {
+      console.error("Agent Recommend Error:", err);
+      res.status(500).json({ success: false, error: err.message || "Internal agent error" });
+    }
+  });
+});
+
 // API: Natural Language Recruiter Chat Assistant
 app.post("/api/chat", async (req, res) => {
   try {
@@ -1379,17 +1894,30 @@ app.post("/api/chat", async (req, res) => {
     if (aiClient) {
       try {
         const systemPrompt = `
-          You are "FusionAI", the interactive Natural Language AI Assistant of "TalentFusion AI" Workforce Intelligence platform.
+          You are "FusionAI", the interactive Natural Language AI Agent of "TalentFusion AI" Workforce Intelligence platform.
           Your job is to help recruiters search, evaluate, filter, and structure candidates or build specialized teams.
           You have access to the current active Candidate Database:
           ${JSON.stringify(candidatesDb, null, 2)}
 
           Analyze the recruiter's prompt. You can understand requests like:
-          - "Find candidates with React and Go"
-          - "Who is best suited for AI?"
-          - "Identify candidate strengths"
-          - "Show candidates suitable for Team Lead"
-          - "Build the best team"
+          - "Can Rahul work in Healthcare?"
+          - "Can Aman become Team Lead?"
+          - "Who is cheaper?"
+          - "Who learns faster?"
+          - "Who fits startup culture?"
+          - "Who should I remove?"
+          - "Who can mentor juniors?"
+          - "Which candidate has the highest ROI?"
+          - "Which frontend developer is best?"
+          - "Can this candidate work remotely?"
+          - "Will this team survive a tight deadline?"
+          - "If budget is only ₹20L?"
+          - "If we remove Rahul?"
+          - "If we need another AI Engineer?"
+          - "Compare Rahul and Priya"
+          - "Suggest a replacement."
+
+          IMPORTANT: Never answer generically. Always use actual parsed resume data from the Candidate Database. Never hallucinate or make up skills, experience, or project details. If a specific question cannot be answered from the parsed resumes, state that the information is not explicitly mentioned.
 
           Synthesize a helpful, conversational, and expert HR response.
           Additionally, you can specify relevant matching candidate IDs in the "candidateIds" array if specific candidates are discussed, matched, or searched for.
@@ -1403,9 +1931,33 @@ app.post("/api/chat", async (req, res) => {
 
           Response schema to return:
           {
-            "text": "Your professional conversational reply here. Use clean HTML formatting like <b>bolding</b> or lists if needed.",
+            "text": "Your professional conversational reply here. Use clean HTML formatting like <b>bolding</b> or lists if needed. Explain your reasoning fully.",
             "candidateIds": ["cand-1", "cand-2"], (OPTIONAL - array of candidate IDs that are relevant or match the search terms/discussion)
-            "suggestedAction": { "type": "view_candidate", "payload": { "id": "cand-1" } } (OPTIONAL - only return if relevant to trigger action)
+            "suggestedAction": { "type": "view_candidate", "payload": { "id": "cand-1" } }, (OPTIONAL - only return if relevant to trigger action)
+            "agentReport": {
+              "overallVerdict": "State overall workforce suitability verdict",
+              "fitScore": 88, (integer 0-100)
+              "technicalMatch": 92, (integer 0-100)
+              "businessFit": 85, (integer 0-100)
+              "leadershipScore": 80, (integer 0-100)
+              "communicationScore": 82, (integer 0-100)
+              "learningAbility": 89, (integer 0-100)
+              "innovationScore": 81, (integer 0-100)
+              "salaryEfficiency": 78, (integer 0-100)
+              "teamCompatibility": 88, (integer 0-100)
+              "riskLevel": "Low", (e.g., "Low", "Medium", "High")
+              "confidenceScore": 94, (integer 0-100 representing confidence)
+              "whyBulletPoints": ["bullet point reasoning explaining exactly why this recommendation makes sense"],
+              "matchingSkills": ["exact matching skills parsed from candidate resumes"],
+              "relevantProjects": ["relevant projects parsed from candidate resumes that prove fit"],
+              "experienceOverlap": "describe experience overlap and years alignment",
+              "domainKnowledge": "describe domain knowledge suitability",
+              "missingSkills": ["missing skills from the requirements if any"],
+              "budgetConcerns": "describe budget or salary concerns if any",
+              "leadershipConcerns": "describe any leadership or authority concerns if any",
+              "learningCurveConcern": "describe expected operational learning curve in weeks",
+              "suggestedActionLabel": "✔ Strong Hire" (must be one of: "✔ Hire", "✔ Strong Hire", "✔ Hire after Upskilling", "✔ Suitable as Team Lead", "✔ Better for Startup", "✔ Better for Enterprise", "✔ Keep as Backup")
+            } (OPTIONAL - return if candidate evaluation, recommendation, comparison, or team sizing is requested or active in context)
           }
 
           Return ONLY valid JSON.
@@ -1416,22 +1968,17 @@ app.post("/api/chat", async (req, res) => {
           parts: [{ text: m.text }]
         })) : [];
 
-        // Add recent query
-        chatHistory.push({
-          role: "user",
-          parts: [{ text: recentQuery }]
-        });
+        // Filter out any system instructions or messages that aren't user/model
+        const cleanHistory = chatHistory.filter((m: any) => m.role === "user" || m.role === "model");
 
         const response = await aiClient.models.generateContent({
-          model: "gemini-2.5-flash",
-          contents: chatHistory.length > 0 ? [
-            { text: systemPrompt },
-            ...chatHistory.slice(-10) // Send last 10 messages for context
-          ] : [
-            { text: systemPrompt },
-            { text: recentQuery }
+          model: "gemini-3.5-flash",
+          contents: [
+            ...cleanHistory.slice(-8), // Send last 8 messages for context
+            { role: "user", parts: [{ text: recentQuery }] }
           ],
           config: {
+            systemInstruction: systemPrompt,
             responseMimeType: "application/json",
           }
         });
@@ -1511,6 +2058,22 @@ app.get("/api/export/excel", (req, res) => {
     console.error("Excel Export Error:", error);
     res.status(500).json({ success: false, error: "Failed to generate Excel report." });
   }
+});
+
+// API catch-all handler to prevent SPA HTML fallback for missing/malformed API endpoints
+app.use((req, res, next) => {
+  const isApiRoute = req.path.startsWith("/api") || 
+                     req.path.startsWith("/agent") || 
+                     ["/parse", "/upload", "/team-analysis", "/health", "/status", "/teambuilder", "/chat"].includes(req.path);
+  if (isApiRoute) {
+    console.log(`[TalentFusion AI API 404] ${req.method} ${req.path}`);
+    res.status(404).json({
+      success: false,
+      error: `API endpoint not found: ${req.method} ${req.originalUrl}`
+    });
+    return;
+  }
+  next();
 });
 
 // Vite Middleware integration for Full Stack Development / Asset Serving

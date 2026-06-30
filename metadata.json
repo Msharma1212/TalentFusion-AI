@@ -1,0 +1,6 @@
+{
+  "name": "TalentFusion AI",
+  "description": "AI-Powered Workforce Intelligence Platform for talent parsing, graph visualization, team building, compatibility analytics, and candidate reports.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
